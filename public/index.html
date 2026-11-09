@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Context Squeezer — squeeze long text, keep the meaning</title>
+<style>
+  :root { --ink:#1a1a1a; --mut:#666; --line:#ddd; --accent:#0b5fff; --warn:#8a5a00; --warn-bg:#fff4d6; }
+  * { box-sizing:border-box; }
+  body { font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; color:var(--ink); max-width:860px; margin:0 auto; padding:24px 16px 64px; line-height:1.5; }
+  h1 { font-size:1.6rem; margin:0 0 4px; }
+  p.sub { color:var(--mut); margin:0 0 20px; }
+  label { font-weight:600; display:block; margin:14px 0 6px; }
+  textarea { width:100%; min-height:180px; padding:10px; font:inherit; border:1px solid var(--line); border-radius:8px; resize:vertical; }
+  textarea[readonly] { background:#fafafa; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; align-items:end; }
+  .row > div { flex:1 1 160px; }
+  select, button { font:inherit; padding:9px 12px; border-radius:8px; border:1px solid var(--line); background:#fff; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; cursor:pointer; }
+  button.primary:disabled { opacity:.55; cursor:wait; }
+  button { cursor:pointer; }
+  .meta { color:var(--mut); font-size:.9rem; }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:10px; margin:16px 0; }
+  .stat { border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+  .stat b { display:block; font-size:1.25rem; }
+  .stat span { color:var(--mut); font-size:.85rem; }
+  #status { min-height:1.5em; margin:10px 0; color:var(--mut); }
+  #status.error { color:#b00020; }
+  #mockBanner { display:none; background:var(--warn-bg); color:var(--warn); border:1px solid #e8c96a; border-radius:8px; padding:10px 12px; margin:0 0 16px; font-weight:600; }
+  footer { margin-top:28px; color:var(--mut); font-size:.85rem; border-top:1px solid var(--line); padding-top:12px; }
+  code { background:#f2f2f2; padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+<h1>Context Squeezer</h1>
+<p class="sub">Paste long text — agent context, a prompt, logs — and get a shorter version that keeps the meaning. Powered by the BharatCode model API. Byte counts are measured per run; no ratio is promised in advance.</p>
+<div id="mockBanner">DEMO MODE — no API key is set, so this output is an extractive mock, not a model result. Set <code>BHARATCODE_API_KEY</code> for real squeezes.</div>
+
+<label for="input">Text to squeeze</label>
+<textarea id="input" placeholder="Paste the long text here…"></textarea>
+<div class="meta"><span id="inBytes">0</span> bytes in (<span id="inChars">0</span> characters — bytes are what count, and they differ on non-ASCII text)</div>
+
+<div class="row">
+  <div>
+    <label for="target">Squeeze to</label>
+    <select id="target">
+      <option value="half" selected>About half (~50%)</option>
+      <option value="quarter">About a quarter (~25%)</option>
+      <option value="tenth">About a tenth (~10%)</option>
+    </select>
+  </div>
+  <div>
+    <label for="model">Model</label>
+    <select id="model"><option value="qwen-3.8-27b">qwen-3.8-27b</option></select>
+  </div>
+  <div>
+    <label>&nbsp;</label>
+    <button class="primary" id="go">Squeeze it</button>
+  </div>
+</div>
+
+<div id="status" aria-live="polite"></div>
+
+<div class="stats" id="stats" hidden>
+  <div class="stat"><b id="stIn">–</b><span>bytes in</span></div>
+  <div class="stat"><b id="stOut">–</b><span>bytes out</span></div>
+  <div class="stat"><b id="stSaved">–</b><span>bytes saved</span></div>
+  <div class="stat"><b id="stRatio">–</b><span>ratio (out ÷ in)</span></div>
+  <div class="stat"><b id="stModel">–</b><span>model</span></div>
+  <div class="stat"><b id="stTime">–</b><span>time</span></div>
+</div>
+
+<label for="output">Squeezed text</label>
+<textarea id="output" readonly placeholder="Your squeezed text will appear here."></textarea>
+<div class="row" style="margin-top:10px">
+  <div><button id="copy" disabled>Copy squeezed text</button></div>
+</div>
+
+<footer>
+  Built by Slid Phi Labs for the BharatCode Build League 2026. Model calls go to
+  <code>bharatcode.ai/api/model/v1</code>. Ratio is measured per run as
+  <code>outBytes ÷ inBytes</code> — this page never claims a fixed compression ratio.
+  Input cap: 120,000 bytes. The API shares capacity and can queue when busy, so a squeeze can take a while.
+</footer>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const enc = new TextEncoder();
+const fmt = (n) => n.toLocaleString("en-US");
+
+function refreshIn() {
+  const t = $("input").value;
+  $("inBytes").textContent = fmt(enc.encode(t).length);
+  $("inChars").textContent = fmt([...t].length);
+}
+$("input").addEventListener("input", refreshIn);
+refreshIn();
+
+async function loadStatus() {
+  try {
+    const [st, mo] = await Promise.all([
+      fetch("/api/status").then((r) => r.json()),
+      fetch("/api/models").then((r) => r.json()).catch(() => null),
+    ]);
+    if (st.mock) $("mockBanner").style.display = "block";
+    if (mo && mo.models && mo.models.length) {
+      const sel = $("model");
+      sel.innerHTML = "";
+      for (const m of mo.models) {
+        const o = document.createElement("option");
+        o.value = m.id; o.textContent = m.id + (m.status === "live" ? "" : " (" + m.status + ")");
+        sel.appendChild(o);
+      }
+      sel.value = st.model || "qwen-3.8-27b";
+    }
+    if (!st.hasKey && !st.mock) {
+      $("status").textContent = "No API key configured on this server — squeezes will fail until BHARATCODE_API_KEY is set (or restart with MOCK_LLM=1 for a demo).";
+    }
+  } catch { /* status is best-effort */ }
+}
+loadStatus();
+
+$("go").addEventListener("click", async () => {
+  const text = $("input").value;
+  const btn = $("go"), status = $("status");
+  btn.disabled = true;
+  status.className = "";
+  status.textContent = "Squeezing… (the API shares capacity and can queue when busy — this can take a minute or more.)";
+  $("output").value = "";
+  $("stats").hidden = true;
+  $("copy").disabled = true;
+  try {
+    const res = await fetch("/api/squeeze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, target: $("target").value, model: $("model").value }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      status.className = "error";
+      status.textContent = "Error: " + (data.message || data.error || ("HTTP " + res.status));
+      return;
+    }
+    $("output").value = data.squeezed;
+    $("stIn").textContent = fmt(data.inBytes);
+    $("stOut").textContent = fmt(data.outBytes);
+    $("stSaved").textContent = fmt(data.savedBytes);
+    $("stRatio").textContent = data.ratio.toFixed(3) + "  (" + (data.ratio * 100).toFixed(1) + "%)";
+    $("stModel").textContent = data.model + (data.mock ? " · mock" : "");
+    $("stTime").textContent = (data.elapsedMs / 1000).toFixed(1) + " s";
+    $("stats").hidden = false;
+    $("copy").disabled = false;
+    status.textContent = data.mock
+      ? "Done — MOCK output (extractive demo, not a model result)."
+      : "Done — " + fmt(data.savedBytes) + " bytes saved, ratio " + data.ratio.toFixed(3) + ".";
+  } catch (e) {
+    status.className = "error";
+    status.textContent = "Request failed: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("copy").addEventListener("click", async () => {
+  await navigator.clipboard.writeText($("output").value);
+  $("status").textContent = "Copied.";
+});
+</script>
+</body>
+</html>

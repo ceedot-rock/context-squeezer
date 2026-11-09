@@ -1,0 +1,1 @@
+{"description":"Squeeze long text (agent context, prompts, logs) into a shorter version that keeps the meaning, using the BharatCode model API.","engines":{"node":">=20"},"license":"Apache-2.0","main":"server.mjs","name":"context-squeezer","scripts":{"start":"node server.mjs","test":"node --test test.mjs"},"type":"module","version":"1.0.0"}

@@ -1,0 +1,6 @@
+Context Squeezer
+A one-page web app that squeezes long text (LLM agent context, prompts, logs)
+into a shorter version that preserves the meaning, using the BharatCode model API.
+Built by Slid Phi Labs for the BharatCode Build League 2026.
+Model: qwen-3.8-27b via https://bharatcode.ai/api/model/v1/chat/completions
+Run: export BHARATCODE_API_KEY=bc_live_... && npm start, then open http://localhost:3000
